@@ -1,0 +1,1323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pending Stock Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-datalabels/2.2.0/chartjs-plugin-datalabels.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+
+  :root {
+    --bg: #0a0c10;
+    --surface: #111318;
+    --surface2: #1a1d24;
+    --border: #252830;
+    --accent: #00e5b0;
+    --accent2: #ff4d6d;
+    --accent3: #ffd166;
+    --accent4: #6c63ff;
+    --text: #e8eaf0;
+    --text-muted: #6b7280;
+    --active: #00e5b0;
+    --stuck: #ff4d6d;
+    --slow: #ffd166;
+    --long-zero: #6c63ff;
+    --never: #444857;
+    --dead: #ff2b55;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'DM Mono', monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 13px;
+  }
+
+  /* HEADER */
+  .header {
+    padding: 28px 32px 20px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, #0d0f15 0%, var(--bg) 100%);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  .header-left h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+
+  .header-left h1 span { color: var(--accent); }
+
+  .header-left p {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: 4px;
+    letter-spacing: 0.5px;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0,229,176,0.1);
+    border: 1px solid rgba(0,229,176,0.3);
+    color: var(--accent);
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .badge .dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .badge.err { background: rgba(255,77,109,0.1); border-color: rgba(255,77,109,0.3); color: var(--stuck); }
+  .badge.err .dot { background: var(--stuck); animation: none; }
+  .badge.loading .dot { background: var(--slow); }
+
+  .refresh-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .refresh-btn:disabled { opacity: 0.5; cursor: default; }
+
+  #loadOverlay {
+    position: fixed; inset: 0; background: rgba(10,12,16,0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 999; flex-direction: column; gap: 12px;
+  }
+  #loadOverlay.hidden { display: none; }
+  #loadOverlay .spinner {
+    width: 32px; height: 32px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loadOverlay p { color: var(--text-muted); font-size: 12px; }
+  #loadOverlay .err-msg { color: var(--stuck); max-width: 480px; text-align: center; line-height: 1.6; }
+  #loadOverlay .retry-btn {
+    background: var(--surface2); border: 1px solid var(--accent); color: var(--accent);
+    padding: 8px 20px; border-radius: 6px; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 12px;
+  }
+
+  /* FILTERS */
+  .filters-bar {
+    padding: 14px 32px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .filter-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-weight: 500;
+    margin-right: 4px;
+  }
+
+  .filter-select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 28px 6px 10px;
+    border-radius: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    min-width: 130px;
+    transition: border-color 0.2s;
+  }
+
+  .filter-select:focus { border-color: var(--accent); }
+
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .filter-chip.active { font-weight: 600; }
+
+  .chip-all { border-color: var(--border); color: var(--text-muted); }
+  .chip-all.active { background: var(--surface2); border-color: var(--text); color: var(--text); }
+  .chip-Active { border-color: var(--active); color: var(--active); }
+  .chip-Active.active { background: rgba(0,229,176,0.12); }
+  .chip-Stuck { border-color: var(--stuck); color: var(--stuck); }
+  .chip-Stuck.active { background: rgba(255,77,109,0.12); }
+  .chip-Slow { border-color: var(--slow); color: var(--slow); }
+  .chip-Slow.active { background: rgba(255,209,102,0.12); }
+  .chip-LongZero { border-color: var(--long-zero); color: var(--long-zero); }
+  .chip-LongZero.active { background: rgba(108,99,255,0.12); }
+  .chip-Never { border-color: var(--never); color: #888; }
+  .chip-Never.active { background: rgba(68,72,87,0.3); }
+
+  .reset-btn {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 5px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    transition: all 0.2s;
+  }
+  .reset-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* MAIN LAYOUT */
+  .main { padding: 24px 32px; display: flex; flex-direction: column; gap: 24px; }
+
+  /* KPI CARDS */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+  }
+
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .kpi-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--kpi-color, var(--border));
+    transition: opacity 0.2s;
+  }
+
+  .kpi-card:hover { transform: translateY(-2px); border-color: var(--kpi-color, var(--border)); }
+  .kpi-card.selected { border-color: var(--kpi-color, var(--accent)); background: var(--surface2); }
+
+  .kpi-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .kpi-value {
+    font-family: 'Syne', sans-serif;
+    font-size: 32px;
+    font-weight: 800;
+    color: var(--kpi-color, var(--text));
+    line-height: 1;
+  }
+
+  .kpi-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 6px;
+  }
+
+  /* CHARTS GRID */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 20px;
+  }
+
+  .charts-row2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    position: relative;
+  }
+
+  .chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .chart-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.2px;
+  }
+
+  .chart-actions { display: flex; gap: 6px; align-items: center; }
+
+  .toggle-labels-btn, .export-chart-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 4px 10px;
+    border-radius: 5px;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .toggle-labels-btn:hover, .export-chart-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .toggle-labels-btn.active { background: rgba(0,229,176,0.1); border-color: var(--accent); color: var(--accent); }
+
+  .chart-wrap { position: relative; }
+
+  /* TABLE SECTION */
+  .table-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .table-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .table-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .table-controls { display: flex; gap: 8px; align-items: center; }
+
+  .search-input {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    outline: none;
+    width: 200px;
+    transition: border-color 0.2s;
+  }
+
+  .search-input:focus { border-color: var(--accent); }
+
+  .export-btn {
+    background: rgba(0,229,176,0.1);
+    border: 1px solid rgba(0,229,176,0.4);
+    color: var(--accent);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .export-btn:hover { background: rgba(0,229,176,0.2); }
+
+  .table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; }
+
+  table { width: 100%; border-collapse: collapse; min-width: 780px; }
+
+  thead { position: sticky; top: 0; z-index: 5; }
+
+  th {
+    background: var(--surface2);
+    padding: 10px 14px;
+    text-align: left;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-muted);
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  th:hover { color: var(--accent); }
+  th .sort-icon { margin-left: 4px; opacity: 0.5; }
+
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(37,40,48,0.6);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  tr:hover td { background: rgba(255,255,255,0.025); }
+
+  .badge-class {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+
+  .badge-Active { background: rgba(0,229,176,0.12); color: var(--active); border: 1px solid rgba(0,229,176,0.3); }
+  .badge-Stuck { background: rgba(255,77,109,0.12); color: var(--stuck); border: 1px solid rgba(255,77,109,0.3); }
+  .badge-Slow { background: rgba(255,209,102,0.12); color: var(--slow); border: 1px solid rgba(255,209,102,0.3); }
+  .badge-LongZero { background: rgba(108,99,255,0.12); color: var(--long-zero); border: 1px solid rgba(108,99,255,0.3); }
+  .badge-NeverStocked { background: rgba(68,72,87,0.2); color: #888; border: 1px solid var(--border); }
+
+  .flag-new { color: var(--accent); font-weight: 600; }
+  .flag-dropped { color: var(--stuck); font-weight: 600; }
+
+  .dead-risk-icon { font-size: 13px; }
+
+  .change-pos { color: var(--active); }
+  .change-neg { color: var(--stuck); }
+
+  .table-footer {
+    padding: 10px 20px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* TOOLTIP OVERRIDE */
+  .chartjs-tooltip {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+  }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--surface); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3d47; }
+
+  @media (max-width: 900px) {
+    .charts-grid { grid-template-columns: 1fr; }
+    .charts-row2 { grid-template-columns: 1fr; }
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .main { padding: 16px; }
+    .header, .filters-bar { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loadOverlay">
+  <div class="spinner" id="loadSpinner"></div>
+  <p id="loadMsg">Loading live data from Google Sheet…</p>
+</div>
+
+<div class="header">
+  <div class="header-left">
+    <h1>Pending Stock <span>Dashboard</span></h1>
+    <p>SKU-LEVEL INVENTORY HEALTH · CLASSIFICATION · WEEKLY MOVEMENT</p>
+  </div>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <div class="badge" id="statusBadge"><span class="dot"></span><span id="statusText">Loading...</span></div>
+    <button class="refresh-btn" id="refreshBtn" onclick="loadData()">↻ Refresh</button>
+  </div>
+</div>
+
+<div class="filters-bar">
+  <span class="filter-label">Filter:</span>
+  <select class="filter-select" id="filterBrand" onchange="applyFilters()">
+    <option value="">All Brands</option>
+  </select>
+  <select class="filter-select" id="filterFlag" onchange="applyFilters()">
+    <option value="">All Flags</option>
+    <option value="New Inward">New Inward</option>
+    <option value="Dropped to Zero">Dropped to Zero</option>
+    <option value="Normal">Normal</option>
+  </select>
+  <select class="filter-select" id="filterSKU" onchange="applyFilters()">
+    <option value="">All SKUs</option>
+  </select>
+
+  <span style="margin-left:8px; color: var(--border)">|</span>
+
+  <span class="filter-chip chip-all active" id="chip-all" onclick="filterByClass('')">All</span>
+  <span class="filter-chip chip-Active" id="chip-Active" onclick="filterByClass('Active')">Active</span>
+  <span class="filter-chip chip-Stuck" id="chip-Stuck" onclick="filterByClass('Stuck Inventory')">Stuck</span>
+  <span class="filter-chip chip-Slow" id="chip-Slow" onclick="filterByClass('Slow Moving')">Slow</span>
+  <span class="filter-chip chip-LongZero" id="chip-LongZero" onclick="filterByClass('Long Zero')">Long Zero</span>
+  <span class="filter-chip chip-Never" id="chip-Never" onclick="filterByClass('Never Stocked')">Never Stocked</span>
+  <button class="reset-btn" onclick="resetFilters()">↺ Reset</button>
+</div>
+
+<div class="main">
+
+  <!-- KPI CARDS -->
+  <div class="kpi-grid" id="kpiGrid">
+    <div class="kpi-card" style="--kpi-color: var(--text)" onclick="filterByClass('')">
+      <div class="kpi-label">Total SKUs</div>
+      <div class="kpi-value" id="kpi-total">242</div>
+      <div class="kpi-sub">All inventory items</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: var(--active)" onclick="filterByClass('Active')">
+      <div class="kpi-label">Active</div>
+      <div class="kpi-value" id="kpi-active">51</div>
+      <div class="kpi-sub">Regular movement</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: var(--stuck)" onclick="filterByClass('Stuck Inventory')">
+      <div class="kpi-label">Stuck</div>
+      <div class="kpi-value" id="kpi-stuck">12</div>
+      <div class="kpi-sub">&lt;5% movement</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: var(--slow)" onclick="filterByClass('Slow Moving')">
+      <div class="kpi-label">Slow Moving</div>
+      <div class="kpi-value" id="kpi-slow">3</div>
+      <div class="kpi-sub">Low consistent mvmt</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: var(--long-zero)" onclick="filterByClass('Long Zero')">
+      <div class="kpi-label">Long Zero</div>
+      <div class="kpi-value" id="kpi-longzero">69</div>
+      <div class="kpi-sub">Zero qty 4+ weeks</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: #555" onclick="filterByClass('Never Stocked')">
+      <div class="kpi-label">Never Stocked</div>
+      <div class="kpi-value" id="kpi-never" style="color:#666">107</div>
+      <div class="kpi-sub">Always zero/blank</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: var(--accent)" onclick="filterByFlag('New Inward')">
+      <div class="kpi-label">New Inward</div>
+      <div class="kpi-value" id="kpi-newinward">1</div>
+      <div class="kpi-sub">↑ from 0 this week</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: var(--stuck)" onclick="filterByFlag('Dropped to Zero')">
+      <div class="kpi-label">Dropped to Zero</div>
+      <div class="kpi-value" id="kpi-dropped">2</div>
+      <div class="kpi-sub">↓ to 0 this week</div>
+    </div>
+    <div class="kpi-card" style="--kpi-color: var(--dead)">
+      <div class="kpi-label">🚨 Dead Risk</div>
+      <div class="kpi-value" id="kpi-dead" style="color: var(--dead)">12</div>
+      <div class="kpi-sub">High stock + stuck</div>
+    </div>
+  </div>
+
+  <!-- CHARTS ROW 1 -->
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">Inventory Health</div>
+        <div class="chart-actions">
+          <button class="toggle-labels-btn" id="lblBtn-donut" onclick="toggleLabels('donut')">Labels</button>
+          <button class="export-chart-btn" onclick="exportChart('donutChart', 'Inventory_Health')">⬇ JPG</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:240px">
+        <canvas id="donutChart"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">Weekly Inventory Trend</div>
+        <div class="chart-actions">
+          <button class="toggle-labels-btn" id="lblBtn-line" onclick="toggleLabels('line')">Labels</button>
+          <button class="export-chart-btn" onclick="exportChart('lineChart', 'Weekly_Trend')">⬇ JPG</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:240px">
+        <canvas id="lineChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHARTS ROW 2 -->
+  <div class="charts-row2">
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">New Inward vs Dropped to Zero</div>
+        <div class="chart-actions">
+          <button class="toggle-labels-btn" id="lblBtn-bar" onclick="toggleLabels('bar')">Labels</button>
+          <button class="export-chart-btn" onclick="exportChart('barChart', 'New_vs_Dropped')">⬇ JPG</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:220px">
+        <canvas id="barChart"></canvas>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">Top Stuck / Slow SKUs by Stock</div>
+        <div class="chart-actions">
+          <button class="toggle-labels-btn" id="lblBtn-hbar" onclick="toggleLabels('hbar')">Labels</button>
+          <button class="export-chart-btn" onclick="exportChart('hbarChart', 'Top_Stuck_SKUs')">⬇ JPG</button>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:220px">
+        <canvas id="hbarChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- TABLE -->
+  <div class="table-section">
+    <div class="table-header">
+      <div class="table-title">SKU Detail Table</div>
+      <div class="table-controls">
+        <input class="search-input" id="searchInput" placeholder="Search SKU..." oninput="renderTable()">
+        <button class="export-btn" onclick="exportExcel()">⬇ Export Excel</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="skuTable">
+        <thead>
+          <tr>
+            <th onclick="sortTable('SKU')">SKU <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Brand')">Brand <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Total Stock')">Total Stock <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Current Week Qty')">Curr. Wk Qty <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Last Week Qty')">Last Wk Qty <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Weekly Change %')">Movement % <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Avg Weekly Movement')">Avg Weekly <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Classification')">Classification <span class="sort-icon">↕</span></th>
+            <th onclick="sortTable('Weekly Flag')">Flag <span class="sort-icon">↕</span></th>
+            <th>Risk</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <div class="table-footer">
+      <span id="tableCount">Showing 0 rows</span>
+      <span style="color: var(--text-muted)">Click column header to sort · Click chart/KPI to filter</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─────────────────────────────────────────
+// DATA
+// ─────────────────────────────────────────
+// ─────────────────────────────────────────
+// CONFIG — Google Sheet source
+// ─────────────────────────────────────────
+const SPREADSHEET_ID = '1dkaEAraqFAaMnK4NZK7Kj-LyIen3mGZPU9IZtegqAwo';
+const SHEET_NAME = ''; // leave blank to use the first/default tab. Set e.g. 'Date Wise' to target a specific tab.
+
+let RAW_DATA = null;
+
+function buildCsvUrl() {
+  let url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:csv`;
+  if (SHEET_NAME) url += `&sheet=${encodeURIComponent(SHEET_NAME)}`;
+  url += `&_cb=${Date.now()}`;
+  return url;
+}
+
+function normHeader(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function findCol(headers, candidates) {
+  const nh = headers.map(normHeader);
+  for (const cand of candidates) {
+    const idx = nh.indexOf(normHeader(cand));
+    if (idx !== -1) return idx;
+  }
+  for (const cand of candidates) {
+    const nc = normHeader(cand);
+    const idx = nh.findIndex(h => h.includes(nc));
+    if (idx !== -1) return idx;
+  }
+  return -1;
+}
+
+function parseHeaderDate(h) {
+  const s = String(h || '').trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) return null;
+  let [, mo, da, yr] = m;
+  yr = yr.length === 2 ? '20' + yr : yr;
+  const d = new Date(parseInt(yr), parseInt(mo) - 1, parseInt(da));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function fmtDateLabel(d) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[d.getMonth()]} ${String(d.getDate()).padStart(2,'0')}`;
+}
+
+async function fetchSheetRows() {
+  const res = await fetch(buildCsvUrl());
+  if (!res.ok) throw new Error(`Sheet request failed (HTTP ${res.status}). Confirm the sheet is shared as "Anyone with the link – Viewer".`);
+  const text = await res.text();
+  if (/^<!DOCTYPE html/i.test(text.trim())) {
+    throw new Error('Received an HTML page instead of CSV. Confirm the sheet is shared as "Anyone with the link – Viewer" and the tab name (if set) is correct.');
+  }
+  const parsed = Papa.parse(text.trim(), { skipEmptyLines: false });
+  if (!parsed.data || !parsed.data.length) throw new Error('Sheet returned no data.');
+  return parsed.data;
+}
+
+function num(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  const n = parseFloat(String(v).replace(/,/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function processSheetRows(rows) {
+  const headers = rows[0].map(h => String(h || '').trim());
+
+  const skuIdx = findCol(headers, ['SKU']);
+  const finalIdx = findCol(headers, ['Final', 'Total Stock']);
+  const brandIdx = findCol(headers, ['Brand']);
+
+  if (skuIdx === -1) throw new Error('Could not find a "SKU" column in the sheet header row.');
+
+  const dateCols = [];
+  headers.forEach((h, i) => {
+    const d = parseHeaderDate(h);
+    if (d) dateCols.push({ idx: i, date: d });
+  });
+  if (!dateCols.length) throw new Error('Could not find any weekly date columns (expected header format M/D/YYYY).');
+  dateCols.sort((a, b) => a.date - b.date);
+
+  const dataRows = rows.slice(1).filter(r => r[skuIdx] && String(r[skuIdx]).trim() !== '');
+
+  const skus = dataRows.map(r => {
+    const weekly = dateCols.map(dc => num(r[dc.idx]));
+    const n = weekly.length;
+    const cur = weekly[n - 1];
+    const lastWk = n > 1 ? weekly[n - 2] : 0;
+    const last6 = weekly.slice(Math.max(0, n - 7), n - 1);
+    const nz6 = last6.filter(v => v > 0);
+    const zeroWeeks6 = last6.length - nz6.length;
+    const allZero = weekly.every(v => v === 0);
+
+    let classification;
+    if (allZero) {
+      classification = 'Never Stocked';
+    } else if (zeroWeeks6 >= 4 && cur === 0) {
+      classification = 'Long Zero';
+    } else if (cur > 0 && nz6.length >= 2 && Math.max(...nz6) > 0 &&
+               ((Math.max(...nz6) - Math.min(...nz6)) / Math.max(...nz6) * 100) < 5) {
+      classification = 'Stuck Inventory';
+    } else if (zeroWeeks6 <= 2) {
+      classification = 'Active';
+    } else {
+      classification = 'Slow Moving';
+    }
+
+    let weeklyFlag = 'Normal';
+    if (lastWk === 0 && cur > 0) weeklyFlag = 'New Inward';
+    else if (lastWk > 0 && cur === 0) weeklyFlag = 'Dropped to Zero';
+
+    const changePct = lastWk > 0 ? ((cur - lastWk) / lastWk * 100) : (cur > 0 ? 100 : 0);
+    const avgMovement = nz6.length ? (nz6.reduce((a, b) => a + b, 0) / nz6.length) : 0;
+    const totalStock = finalIdx !== -1 ? num(r[finalIdx]) : 0;
+    const deadRisk = classification === 'Stuck Inventory' && totalStock > 0;
+
+    return {
+      SKU: String(r[skuIdx]).trim(),
+      Brand: brandIdx !== -1 ? (String(r[brandIdx] || '').trim() || 'Unknown') : 'Unknown',
+      'Total Stock': String(Math.round(totalStock)),
+      'Current Week Qty': String(cur),
+      'Last Week Qty': String(lastWk),
+      'Weekly Change %': String(Math.round(changePct * 10) / 10),
+      'Avg Weekly Movement': String(Math.round(avgMovement * 10) / 10),
+      Classification: classification,
+      'Weekly Flag': weeklyFlag,
+      'Dead Risk': deadRisk,
+      _weekly: weekly,
+    };
+  });
+
+  const cnt = cls => skus.filter(s => s.Classification === cls).length;
+  const kpis = {
+    total_skus: skus.length,
+    active: cnt('Active'),
+    stuck: cnt('Stuck Inventory'),
+    slow: cnt('Slow Moving'),
+    long_zero: cnt('Long Zero'),
+    never_stocked: cnt('Never Stocked'),
+    new_inward: skus.filter(s => s['Weekly Flag'] === 'New Inward').length,
+    dropped_to_zero: skus.filter(s => s['Weekly Flag'] === 'Dropped to Zero').length,
+    dead_risk: skus.filter(s => s['Dead Risk']).length,
+  };
+
+  const classification_dist = {
+    'Never Stocked': kpis.never_stocked,
+    'Long Zero': kpis.long_zero,
+    'Active': kpis.active,
+    'Stuck Inventory': kpis.stuck,
+    'Slow Moving': kpis.slow,
+  };
+
+  const weekly_trend = dateCols.map((dc, wi) => ({
+    date: fmtDateLabel(dc.date),
+    total: skus.reduce((sum, s) => sum + s._weekly[wi], 0),
+  }));
+
+  const top_stuck = skus
+    .filter(s => s.Classification === 'Stuck Inventory' || s.Classification === 'Slow Moving')
+    .sort((a, b) => parseFloat(b['Total Stock']) - parseFloat(a['Total Stock']))
+    .slice(0, 10)
+    .map(s => [s.SKU, parseFloat(s['Total Stock']), s.Classification]);
+
+  const new_vs_dropped = { 'New Inward': kpis.new_inward, 'Dropped to Zero': kpis.dropped_to_zero };
+
+  skus.forEach(s => delete s._weekly);
+
+  return { kpis, weekly_trend, classification_dist, top_stuck, new_vs_dropped, skus, weeks: dateCols.length };
+}
+
+function setStatus(mode, text) {
+  const badge = document.getElementById('statusBadge');
+  const statusText = document.getElementById('statusText');
+  badge.classList.remove('err', 'loading');
+  if (mode === 'err') badge.classList.add('err');
+  if (mode === 'loading') badge.classList.add('loading');
+  statusText.textContent = text;
+}
+
+async function loadData() {
+  const overlay = document.getElementById('loadOverlay');
+  const refreshBtn = document.getElementById('refreshBtn');
+  overlay.classList.remove('hidden');
+  overlay.innerHTML = `<div class="spinner"></div><p>Loading live data from Google Sheet…</p>`;
+  refreshBtn.disabled = true;
+  setStatus('loading', 'Loading...');
+
+  try {
+    const rows = await fetchSheetRows();
+    RAW_DATA = processSheetRows(rows);
+
+    document.getElementById('filterBrand').innerHTML = '<option value="">All Brands</option>' +
+      [...new Set(RAW_DATA.skus.map(s => s.Brand))].sort().map(b => `<option value="${b}">${b}</option>`).join('');
+    document.getElementById('filterSKU').innerHTML = '<option value="">All SKUs</option>';
+    populateSKUDropdown();
+
+    if (charts.donut) { Object.values(charts).forEach(c => c && c.destroy()); charts = {}; }
+    initCharts();
+    renderTable();
+    updateKPIs();
+
+    setStatus('ok', `LIVE ANALYSIS · ${RAW_DATA.kpis.total_skus} SKUs · ${RAW_DATA.weeks} Weeks`);
+    overlay.classList.add('hidden');
+  } catch (err) {
+    console.error(err);
+    setStatus('err', 'Load failed');
+    overlay.innerHTML = `
+      <p class="err-msg">⚠ Couldn't load the Google Sheet.<br>${err.message}</p>
+      <button class="retry-btn" onclick="loadData()">Retry</button>
+    `;
+  } finally {
+    refreshBtn.disabled = false;
+  }
+}
+
+// ─────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────
+let activeClassFilter = '';
+let activeFlagFilter = '';
+let sortKey = 'Classification';
+let sortDir = 1;
+let labelStates = { donut: false, line: false, bar: false, hbar: false };
+let charts = {};
+
+// ─────────────────────────────────────────
+// CHART.JS GLOBAL CONFIG
+// ─────────────────────────────────────────
+Chart.register(ChartDataLabels);
+Chart.defaults.color = '#6b7280';
+Chart.defaults.font.family = "'DM Mono', monospace";
+Chart.defaults.font.size = 11;
+
+const COLORS = {
+  'Active': '#00e5b0',
+  'Stuck Inventory': '#ff4d6d',
+  'Slow Moving': '#ffd166',
+  'Long Zero': '#6c63ff',
+  'Never Stocked': '#444857',
+};
+
+// ─────────────────────────────────────────
+// CHART CREATION
+// ─────────────────────────────────────────
+function makeTooltip(title, lines) {
+  return {
+    plugins: {
+      tooltip: {
+        backgroundColor: '#1a1d24',
+        borderColor: '#252830',
+        borderWidth: 1,
+        titleColor: '#e8eaf0',
+        bodyColor: '#9ca3af',
+        padding: 10,
+        callbacks: {
+          label: function(ctx) {
+            const v = ctx.raw;
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            const pct = total > 0 ? ((v/total)*100).toFixed(1) : 0;
+            return ` ${ctx.label || ctx.dataset.label}: ${v.toLocaleString()} (${pct}%)`;
+          }
+        }
+      }
+    }
+  };
+}
+
+function initCharts() {
+  // DONUT
+  const dist = RAW_DATA.classification_dist;
+  const labels = Object.keys(dist);
+  const values = Object.values(dist);
+  const bgColors = labels.map(l => COLORS[l] || '#666');
+
+  charts.donut = new Chart(document.getElementById('donutChart'), {
+    type: 'doughnut',
+    data: {
+      labels,
+      datasets: [{ data: values, backgroundColor: bgColors, borderColor: '#0a0c10', borderWidth: 3, hoverBorderWidth: 1 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      cutout: '65%',
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: { padding: 12, boxWidth: 10, boxHeight: 10, usePointStyle: true, pointStyle: 'circle' }
+        },
+        tooltip: {
+          backgroundColor: '#1a1d24', borderColor: '#252830', borderWidth: 1,
+          titleColor: '#e8eaf0', bodyColor: '#9ca3af', padding: 10,
+          callbacks: {
+            label: ctx => {
+              const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+              const pct = ((ctx.raw/total)*100).toFixed(1);
+              return ` ${ctx.label}: ${ctx.raw} SKUs (${pct}%)`;
+            }
+          }
+        },
+        datalabels: {
+          display: false,
+          formatter: (v, ctx) => {
+            const total = ctx.dataset.data.reduce((a,b)=>a+b,0);
+            return ((v/total)*100).toFixed(1) + '%';
+          },
+          color: '#fff',
+          font: { size: 11, weight: 'bold' }
+        }
+      },
+      onClick: (e, els) => {
+        if (els.length) {
+          const lbl = labels[els[0].index];
+          filterByClass(lbl === activeClassFilter ? '' : lbl);
+        }
+      }
+    }
+  });
+
+  // LINE
+  const trend = RAW_DATA.weekly_trend;
+  charts.line = new Chart(document.getElementById('lineChart'), {
+    type: 'line',
+    data: {
+      labels: trend.map(d=>d.date),
+      datasets: [{
+        label: 'Total Inventory',
+        data: trend.map(d=>d.total),
+        borderColor: '#00e5b0',
+        backgroundColor: 'rgba(0,229,176,0.07)',
+        borderWidth: 2,
+        pointRadius: 4,
+        pointBackgroundColor: '#00e5b0',
+        pointBorderColor: '#0a0c10',
+        pointBorderWidth: 2,
+        fill: true,
+        tension: 0.4
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        datalabels: { display: false, color: '#00e5b0', anchor: 'end', align: 'top', font: { size: 10 }, formatter: v => v.toLocaleString() },
+        tooltip: {
+          backgroundColor: '#1a1d24', borderColor: '#252830', borderWidth: 1,
+          titleColor: '#e8eaf0', bodyColor: '#9ca3af', padding: 10,
+          callbacks: { label: ctx => ' Total: ' + ctx.raw.toLocaleString() + ' units' }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#1a1d24' }, ticks: { maxRotation: 45, font: { size: 10 } } },
+        y: { grid: { color: '#1a1d24' }, ticks: { callback: v => v.toLocaleString() } }
+      }
+    }
+  });
+
+  // BAR
+  const nd = RAW_DATA.new_vs_dropped;
+  charts.bar = new Chart(document.getElementById('barChart'), {
+    type: 'bar',
+    data: {
+      labels: ['New Inward', 'Dropped to Zero'],
+      datasets: [{
+        data: [nd['New Inward'], nd['Dropped to Zero']],
+        backgroundColor: ['rgba(0,229,176,0.7)', 'rgba(255,77,109,0.7)'],
+        borderColor: ['#00e5b0', '#ff4d6d'],
+        borderWidth: 1,
+        borderRadius: 6
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        datalabels: { display: false, color: '#e8eaf0', anchor: 'end', align: 'top', font: { size: 12, weight: 'bold' }, formatter: v => v },
+        tooltip: {
+          backgroundColor: '#1a1d24', borderColor: '#252830', borderWidth: 1,
+          titleColor: '#e8eaf0', bodyColor: '#9ca3af', padding: 10
+        }
+      },
+      scales: {
+        x: { grid: { display: false } },
+        y: { grid: { color: '#1a1d24' }, ticks: { stepSize: 1 }, beginAtZero: true }
+      },
+      onClick: (e, els) => {
+        if (els.length) {
+          const flags = ['New Inward', 'Dropped to Zero'];
+          filterByFlag(flags[els[0].index]);
+        }
+      }
+    }
+  });
+
+  // HBAR
+  const stuck = RAW_DATA.top_stuck;
+  charts.hbar = new Chart(document.getElementById('hbarChart'), {
+    type: 'bar',
+    data: {
+      labels: stuck.map(s=>s[0]),
+      datasets: [{
+        data: stuck.map(s=>s[1]),
+        backgroundColor: stuck.map(s => s[2] === 'Slow Moving' ? 'rgba(255,209,102,0.7)' : 'rgba(255,77,109,0.7)'),
+        borderColor: stuck.map(s => s[2] === 'Slow Moving' ? '#ffd166' : '#ff4d6d'),
+        borderWidth: 1,
+        borderRadius: 4
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        datalabels: { display: false, color: '#e8eaf0', anchor: 'end', align: 'right', font: { size: 10 }, formatter: v => v.toLocaleString() },
+        tooltip: {
+          backgroundColor: '#1a1d24', borderColor: '#252830', borderWidth: 1,
+          titleColor: '#e8eaf0', bodyColor: '#9ca3af', padding: 10,
+          callbacks: { label: ctx => ' Stock: ' + ctx.raw.toLocaleString() }
+        }
+      },
+      scales: {
+        x: { grid: { color: '#1a1d24' }, ticks: { callback: v => v.toLocaleString() } },
+        y: { grid: { display: false }, ticks: { font: { size: 10 } } }
+      },
+      onClick: (e, els) => {
+        if (els.length) {
+          const sku = stuck[els[0].index][0];
+          document.getElementById('searchInput').value = sku;
+          renderTable();
+        }
+      }
+    }
+  });
+}
+
+// ─────────────────────────────────────────
+// FILTER LOGIC
+// ─────────────────────────────────────────
+function filterByClass(cls) {
+  activeClassFilter = cls;
+  document.getElementById('filterSKU').value = '';
+  updateChips();
+  renderTable();
+  updateKPIs();
+}
+
+function filterByFlag(flag) {
+  activeFlagFilter = activeFlagFilter === flag ? '' : flag;
+  document.getElementById('filterFlag').value = activeFlagFilter;
+  renderTable();
+  updateKPIs();
+}
+
+function applyFilters() {
+  activeClassFilter = '';
+  activeFlagFilter = document.getElementById('filterFlag').value;
+  updateChips();
+  renderTable();
+  updateKPIs();
+}
+
+function resetFilters() {
+  activeClassFilter = '';
+  activeFlagFilter = '';
+  document.getElementById('filterBrand').value = '';
+  document.getElementById('filterFlag').value = '';
+  document.getElementById('filterSKU').value = '';
+  document.getElementById('searchInput').value = '';
+  updateChips();
+  renderTable();
+  updateKPIs();
+}
+
+function updateChips() {
+  const chips = ['all','Active','Stuck','Slow','LongZero','Never'];
+  const classMap = { 'Active': 'Active', 'Stuck': 'Stuck Inventory', 'Slow': 'Slow Moving', 'LongZero': 'Long Zero', 'Never': 'Never Stocked', 'all': '' };
+  chips.forEach(c => {
+    const el = document.getElementById('chip-' + c);
+    if (el) el.classList.toggle('active', classMap[c] === activeClassFilter);
+  });
+}
+
+function getFiltered() {
+  const brand = document.getElementById('filterBrand').value;
+  const sku = document.getElementById('filterSKU').value;
+  const search = document.getElementById('searchInput').value.toLowerCase();
+
+  return RAW_DATA.skus.filter(r => {
+    if (brand && r.Brand !== brand) return false;
+    if (sku && r.SKU !== sku) return false;
+    if (activeClassFilter && r.Classification !== activeClassFilter) return false;
+    if (activeFlagFilter && r['Weekly Flag'] !== activeFlagFilter) return false;
+    if (search && !r.SKU.toLowerCase().includes(search)) return false;
+    return true;
+  });
+}
+
+// ─────────────────────────────────────────
+// TABLE
+// ─────────────────────────────────────────
+function sortTable(key) {
+  if (sortKey === key) sortDir *= -1;
+  else { sortKey = key; sortDir = 1; }
+  renderTable();
+}
+
+function renderTable() {
+  let rows = getFiltered();
+
+  rows.sort((a, b) => {
+    let va = a[sortKey], vb = b[sortKey];
+    if (!isNaN(parseFloat(va)) && !isNaN(parseFloat(vb))) {
+      va = parseFloat(va); vb = parseFloat(vb);
+    } else {
+      va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
+    }
+    return va < vb ? -sortDir : va > vb ? sortDir : 0;
+  });
+
+  const classMap = {
+    'Active': 'badge-Active',
+    'Stuck Inventory': 'badge-Stuck',
+    'Slow Moving': 'badge-Slow',
+    'Long Zero': 'badge-LongZero',
+    'Never Stocked': 'badge-NeverStocked',
+  };
+
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = rows.map(r => {
+    const chg = parseFloat(r['Weekly Change %']);
+    const chgClass = chg > 0 ? 'change-pos' : chg < 0 ? 'change-neg' : '';
+    const chgStr = chg > 0 ? `+${chg}%` : `${chg}%`;
+    const flagClass = r['Weekly Flag'] === 'New Inward' ? 'flag-new' : r['Weekly Flag'] === 'Dropped to Zero' ? 'flag-dropped' : '';
+    const cls = r.Classification.replace(' ', '').replace(' ', '');
+    const stockNum = parseInt(r['Total Stock']) || 0;
+    const stockHighlight = r['Dead Risk'] ? 'style="color:var(--dead)"' : stockNum > 1000 && r.Classification !== 'Active' ? 'style="color:var(--slow)"' : '';
+    return `<tr>
+      <td style="font-weight:500">${r.SKU}</td>
+      <td style="color:var(--text-muted)">${r.Brand}</td>
+      <td ${stockHighlight}>${stockNum.toLocaleString()}</td>
+      <td>${parseFloat(r['Current Week Qty']).toFixed(0)}</td>
+      <td>${parseFloat(r['Last Week Qty']).toFixed(0)}</td>
+      <td class="${chgClass}">${Math.abs(chg) > 999 ? '>999%' : chgStr}</td>
+      <td>${parseFloat(r['Avg Weekly Movement']).toFixed(1)}</td>
+      <td><span class="badge-class ${classMap[r.Classification] || ''}">${r.Classification}</span></td>
+      <td class="${flagClass}">${r['Weekly Flag']}</td>
+      <td class="dead-risk-icon">${r['Dead Risk'] ? '🚨' : ''}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('tableCount').textContent = `Showing ${rows.length} of ${RAW_DATA.skus.length} SKUs`;
+}
+
+// ─────────────────────────────────────────
+// KPI UPDATE
+// ─────────────────────────────────────────
+function updateKPIs() {
+  const rows = getFiltered();
+  const cnt = (cls) => rows.filter(r => r.Classification === cls).length;
+  document.getElementById('kpi-total').textContent = rows.length;
+  document.getElementById('kpi-active').textContent = cnt('Active');
+  document.getElementById('kpi-stuck').textContent = cnt('Stuck Inventory');
+  document.getElementById('kpi-slow').textContent = cnt('Slow Moving');
+  document.getElementById('kpi-longzero').textContent = cnt('Long Zero');
+  document.getElementById('kpi-never').textContent = cnt('Never Stocked');
+  document.getElementById('kpi-newinward').textContent = rows.filter(r=>r['Weekly Flag']==='New Inward').length;
+  document.getElementById('kpi-dropped').textContent = rows.filter(r=>r['Weekly Flag']==='Dropped to Zero').length;
+  document.getElementById('kpi-dead').textContent = rows.filter(r=>r['Dead Risk']).length;
+}
+
+// ─────────────────────────────────────────
+// TOGGLE LABELS
+// ─────────────────────────────────────────
+function toggleLabels(chartKey) {
+  labelStates[chartKey] = !labelStates[chartKey];
+  const btn = document.getElementById('lblBtn-' + chartKey);
+  btn.classList.toggle('active', labelStates[chartKey]);
+
+  const chartMap = { donut: 'donut', line: 'line', bar: 'bar', hbar: 'hbar' };
+  const chart = charts[chartMap[chartKey]];
+  if (!chart) return;
+
+  chart.options.plugins.datalabels.display = labelStates[chartKey];
+  chart.update();
+}
+
+// ─────────────────────────────────────────
+// CHART EXPORT
+// ─────────────────────────────────────────
+function exportChart(canvasId, name) {
+  const canvas = document.getElementById(canvasId);
+  const scale = 3;
+  const tmpCanvas = document.createElement('canvas');
+  tmpCanvas.width = canvas.width * scale;
+  tmpCanvas.height = canvas.height * scale;
+  const ctx = tmpCanvas.getContext('2d');
+  ctx.fillStyle = '#111318';
+  ctx.fillRect(0, 0, tmpCanvas.width, tmpCanvas.height);
+  ctx.scale(scale, scale);
+  ctx.drawImage(canvas, 0, 0);
+  const link = document.createElement('a');
+  link.download = `${name}.jpg`;
+  link.href = tmpCanvas.toDataURL('image/jpeg', 0.95);
+  link.click();
+}
+
+// ─────────────────────────────────────────
+// EXCEL EXPORT
+// ─────────────────────────────────────────
+function exportExcel() {
+  const rows = getFiltered();
+  if (!rows.length) { alert('No data to export.'); return; }
+
+  const wb = XLSX.utils.book_new();
+  const headers = ['SKU','Brand','Total Stock','Current Week Qty','Last Week Qty','Weekly Change %','Avg Weekly Movement','Classification','Weekly Flag','Dead Risk'];
+  const wsData = [headers, ...rows.map(r => headers.map(h => {
+    if (h === 'Dead Risk') return r[h] ? 'YES' : '';
+    return r[h];
+  }))];
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Column widths
+  ws['!cols'] = [18,8,12,14,13,15,18,18,18,10].map(w=>({wch:w}));
+
+  // Header styling (limited in xlsx.js but we can set row height)
+  ws['!rows'] = [{hpx: 20}];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'SKU Data');
+
+  // Summary sheet
+  const sumData = [
+    ['Metric','Count'],
+    ['Total SKUs', rows.length],
+    ['Active', rows.filter(r=>r.Classification==='Active').length],
+    ['Stuck Inventory', rows.filter(r=>r.Classification==='Stuck Inventory').length],
+    ['Slow Moving', rows.filter(r=>r.Classification==='Slow Moving').length],
+    ['Long Zero', rows.filter(r=>r.Classification==='Long Zero').length],
+    ['Never Stocked', rows.filter(r=>r.Classification==='Never Stocked').length],
+    ['New Inward This Week', rows.filter(r=>r['Weekly Flag']==='New Inward').length],
+    ['Dropped to Zero', rows.filter(r=>r['Weekly Flag']==='Dropped to Zero').length],
+    ['Dead Risk SKUs', rows.filter(r=>r['Dead Risk']).length],
+  ];
+  const ws2 = XLSX.utils.aoa_to_sheet(sumData);
+  ws2['!cols'] = [{wch:25},{wch:10}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Summary');
+
+  XLSX.writeFile(wb, `Inventory_Dashboard_Export.xlsx`);
+}
+
+// ─────────────────────────────────────────
+// POPULATE SKU FILTER DROPDOWN
+// ─────────────────────────────────────────
+function populateSKUDropdown() {
+  const sel = document.getElementById('filterSKU');
+  const skus = [...new Set(RAW_DATA.skus.map(r=>r.SKU))].sort();
+  skus.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s; opt.textContent = s;
+    sel.appendChild(opt);
+  });
+}
+
+// ─────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  loadData();
+});
+</script>
+</body>
+</html>
